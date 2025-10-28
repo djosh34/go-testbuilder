@@ -1,8 +1,11 @@
-module github.com/Emptyless/go-testbuilder
+module github.com/djosh34/go-testbuilder
 
 go 1.24.1
 
-require github.com/stretchr/testify v1.10.0
+require (
+	github.com/stretchr/testify v1.10.0
+	go.uber.org/mock v0.6.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
