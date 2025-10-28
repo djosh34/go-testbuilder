@@ -1,7 +1,6 @@
 package testbuilder
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,8 +84,8 @@ func TestTestsBuilder_Register(t *testing.T) {
 	})
 
 	// Assert
-	require.Len(t, builder.TestCases, 1)
-	assert.Equal(t, builder.TestCases[0], res)
+	require.Len(t, builder.GenerateTestSets()[0].TestCases, 1)
+	assert.Equal(t, builder.GenerateTestSets()[0].TestCases[0], res)
 }
 
 func TestTestsBuilder_Tests_NoTests(t *testing.T) {
@@ -148,7 +147,6 @@ func TestTestsBuilder_SingleTest_SpecificBuilderTakesPrecedence(t *testing.T) {
 }
 
 func TestTestsBuilder_MultipleTests_StateIsRepeated(t *testing.T) {
-	t.Parallel()
 	// Arrange
 	builder := TestsBuilder[string, int, func(t *testing.T)]{}
 	builder.Register("1").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
@@ -164,22 +162,30 @@ func TestTestsBuilder_MultipleTests_StateIsRepeated(t *testing.T) {
 		*state += 1
 	})
 
+	expectedStateSequence := []int{
+		1,
+		2,
+		3,
+		4,
+	}
+
+	indexNum := 0
+	indexPtr := &indexNum
 	for testName, testBuilder := range builder.Tests() {
 		t.Run(testName, func(t *testing.T) {
-			t.Parallel()
 			// Arrange
 			testData := testBuilder(t)
-			counter, err := strconv.Atoi(testName) // using testName because of t.Parallel()
-			require.NoError(t, err)
 
 			// Assert
-			assert.Equal(t, counter, testData.State)
+			assert.Equal(t, expectedStateSequence[*indexPtr], testData.State)
+			*indexPtr = *indexPtr + 1
 		})
 	}
+
+	assert.Equal(t, len(expectedStateSequence), *indexPtr)
 }
 
 func TestTestsBuilder_MultipleTests_PreviousSpecificTestsAreIgnored(t *testing.T) {
-	t.Parallel()
 	// Arrange
 	builder := TestsBuilder[string, int, func(t *testing.T)]{}
 	builder.Register("1").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
@@ -197,21 +203,312 @@ func TestTestsBuilder_MultipleTests_PreviousSpecificTestsAreIgnored(t *testing.T
 		*sut += "d"
 	})
 
-	results := map[string]string{
-		"1": "a",
-		"2": "ab",
-		"3": "-",
-		"4": "abcd",
+	expectedRunSequence := []string{
+		"a",
+		"ab",
+		"-",
+		"abcd",
 	}
 
+	indexNum := 0
+	indexPtr := &indexNum
 	for testName, testBuilder := range builder.Tests() {
 		t.Run(testName, func(t *testing.T) {
-			t.Parallel()
 			// Arrange
 			testData := testBuilder(t)
 
 			// Assert
-			assert.Equal(t, results[testName], testData.SUT)
+			assert.Equal(t, expectedRunSequence[*indexPtr], testData.SUT)
+			*indexPtr = *indexPtr + 1
 		})
 	}
+
+	assert.Equal(t, len(expectedRunSequence), *indexPtr)
+}
+
+func TestTestsBuilder_WithSimpleAlternatives(t *testing.T) {
+	// Arrange
+	builder := TestsBuilder[string, int, func(t *testing.T)]{}
+	builder.Register("1").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut = "a"
+	})
+	builder.RegisterAlternative("2").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut = "b"
+	})
+
+	expectedRunSequence := []string{
+		"a",
+		"b",
+	}
+
+	indexNum := 0
+	indexPtr := &indexNum
+	for testName, testBuilder := range builder.Tests() {
+		t.Run(testName, func(t *testing.T) {
+			// Arrange
+			testData := testBuilder(t)
+
+			// Assert
+			assert.Equal(t, expectedRunSequence[*indexPtr], testData.SUT)
+			*indexPtr = *indexPtr + 1
+		})
+	}
+
+	assert.Equal(t, len(expectedRunSequence), *indexPtr)
+}
+
+func TestTestsBuilder_WithSlightlyMoreComplexAlternatives(t *testing.T) {
+	// Arrange
+	builder := TestsBuilder[string, int, func(t *testing.T)]{}
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		// Use += to capture weird edge cases
+		*sut += "a"
+	})
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "b"
+	})
+	// This registers a full new 'test-run', with all the same stuff above
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "c"
+	})
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "d"
+	})
+
+	expectedRunSequence := []string{
+		"a",
+		"ab",
+		"abd",
+		// Start of next test
+		"a",
+		"ac",
+		"acd",
+	}
+
+	indexNum := 0
+	indexPtr := &indexNum
+	for testName, testBuilder := range builder.Tests() {
+		t.Run(testName, func(t *testing.T) {
+			// Arrange
+			testData := testBuilder(t)
+
+			// Assert
+			assert.Equal(t, expectedRunSequence[*indexPtr], testData.SUT)
+			*indexPtr = *indexPtr + 1
+		})
+	}
+
+	assert.Equal(t, len(expectedRunSequence), *indexPtr)
+}
+
+func TestTestsBuilder_WithComplexAlternatives(t *testing.T) {
+
+	// Arrange
+	builder := TestsBuilder[string, int, func(t *testing.T)]{}
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "a"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "s"
+	})
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "b"
+	})
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "c"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_s2"
+	})
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "d"
+	})
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "e"
+	})
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "f"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_s3"
+	})
+
+	expectedRunSequence := []string{
+		// Test alternative 0 0
+		"as",
+		"ab",
+		"abd",
+		"abde",
+		// Test alternative 1 0
+		"as",
+		"ac_s2",
+		"acd",
+		"acde",
+		// Test alternative 0 1
+		"as",
+		"ab",
+		"abd",
+		"abdf_s3",
+		// Test alternative 1 1
+		"as",
+		"ac_s2",
+		"acd",
+		"acdf_s3",
+	}
+
+	indexNum := 0
+	indexPtr := &indexNum
+	for testName, testBuilder := range builder.Tests() {
+		t.Run(testName, func(t *testing.T) {
+			// Arrange
+			testData := testBuilder(t)
+
+			// Assert
+			assert.Equal(t, expectedRunSequence[*indexPtr], testData.SUT)
+			*indexPtr = *indexPtr + 1
+		})
+	}
+
+	assert.Equal(t, len(expectedRunSequence), *indexPtr)
+}
+
+func TestTestsBuilder_WithMultipleAlternatives(t *testing.T) {
+
+	// Arrange
+	builder := TestsBuilder[string, int, func(t *testing.T)]{}
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "a"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "s"
+	})
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "b"
+	})
+
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "c"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_s2"
+	})
+
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_alt_2"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_alt_s2"
+	})
+
+	expectedRunSequence := []string{
+		// Test alternative 0
+		"as",
+		"ab",
+		// Test alternative 1
+		"as",
+		"ac_s2",
+		// Test alternative 2
+		"as",
+		"a_alt_2_alt_s2",
+	}
+
+	indexNum := 0
+	indexPtr := &indexNum
+	for testName, testBuilder := range builder.Tests() {
+		t.Run(testName, func(t *testing.T) {
+			// Arrange
+			testData := testBuilder(t)
+
+			// Assert
+			assert.Equal(t, expectedRunSequence[*indexPtr], testData.SUT)
+			*indexPtr = *indexPtr + 1
+		})
+	}
+
+	assert.Equal(t, len(expectedRunSequence), *indexPtr)
+}
+func TestTestsBuilder_WithMultipleComplexAlternatives(t *testing.T) {
+	// Arrange
+	builder := TestsBuilder[string, int, func(t *testing.T)]{}
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "a"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "s"
+	})
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "b"
+	})
+
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "c"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_s2"
+	})
+
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_alt_2_"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "alt_s2"
+	})
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "d"
+	})
+
+	builder.Register("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "e"
+	})
+
+	builder.RegisterAlternative("TEST_NAME").WithStateBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "f"
+	}).WithSpecificBuilder(func(t *testing.T, sut *string, state *int) {
+		*sut += "_s3"
+	})
+
+	expectedRunSequence := []string{
+		// Test alternative 0 0
+		"as",
+		"ab",
+		"abd",
+		"abde",
+		// Test alternative 0 1
+		"as",
+		"ac_s2",
+		"acd",
+		"acde",
+		// Test alternative 0 2
+		"as",
+		"a_alt_2_alt_s2",
+		"a_alt_2_d",
+		"a_alt_2_de",
+		// Test alternative 1 0
+		"as",
+		"ab",
+		"abd",
+		"abdf_s3",
+		// Test alternative 1 1
+		"as",
+		"ac_s2",
+		"acd",
+		"acdf_s3",
+		// Test alternative 1 2
+		"as",
+		"a_alt_2_alt_s2",
+		"a_alt_2_d",
+		"a_alt_2_df_s3",
+	}
+
+	indexNum := 0
+	indexPtr := &indexNum
+	for testName, testBuilder := range builder.Tests() {
+		t.Run(testName, func(t *testing.T) {
+			// Arrange
+			testData := testBuilder(t)
+
+			// Assert
+			assert.Equal(t, expectedRunSequence[*indexPtr], testData.SUT)
+			*indexPtr = *indexPtr + 1
+		})
+	}
+
+	assert.Equal(t, len(expectedRunSequence), *indexPtr)
 }
